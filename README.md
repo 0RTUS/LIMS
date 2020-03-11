@@ -1,2 +1,0 @@
-# LIMS
-Codigos/Lab
