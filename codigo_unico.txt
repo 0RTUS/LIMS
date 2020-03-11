@@ -1,0 +1,256 @@
+#include <ESP8266WiFi.h>
+#ifndef STASSID
+#include <Wire.h>
+#include <Adafruit_PWMServoDriver.h>
+
+// chamado dessa maneira, ele usa o endereço padrão 0x40
+Adafruit_PWMServoDriver pwm = Adafruit_PWMServoDriver();
+
+// Dependendo da marca do servo, a largura mínima e máxima do pulso pode variar, você
+// quer que eles sejam tão pequenos / grandes quanto possível, sem bater no disco rígido
+// para alcance máximo. Você precisará ajustá-los conforme necessário para combinar com os servos que
+// ter!
+#define SERVOMIN  150 // Esta é a contagem 'mínima' de comprimento de pulso (de 4096)
+#define SERVOMAX  600 // Esta é a contagem 'maxima' de comprimento de pulso (de 4096)
+#define USMIN  600 // Esse é o comprimento mínimo de microssegundo arredondado, com base no pulso mínimo de 150
+#define USMAX  2400 // Esse é o comprimento máximo máximo de microssegundo arredondado, com base no pulso máximo de 600
+#define SERVO_FREQ 50 // Servos analógicos rodam a ~ 50 Hz atualizações
+
+// rede do meu celular
+#define STASSID "STWA_JR"                     // Nome da rede a ser usada
+#define STAPSK  "774881jr"                    // Senha da rede a ser usada
+
+// rede LIMS
+//#define STASSID "LaPeSi/Lims"
+//#define STAPSK  "naotemsenha"
+
+// rede FERNANDO
+//#define STASSID "Webfoss"
+//#define STAPSK  "eejz6902"
+
+#endif
+
+const char* ssid = STASSID;
+const char* password = STAPSK;
+int direita = D2;                             // CONECTAR O MOTOR DIREITO AO PINO D2
+int direita_inverte = D3;                     // CONECTAR O MOTOR DIREITO INVERTIDO AO PINO D3
+int esquerda = D4;                            // CONECTAR O MOTOR ESQUERDO AO PINO D4
+int esquerda_inverte = D5;                    // CONECTAR O MOTOR ESQUERDO INVERTIDO AO PINO D5
+int farol = D6;                               // CONECTAR OS LEDS DO FAROL AO PINO D6
+int estado_farol = 0;
+
+//D2 (direita) = D4
+//D3 (direita_inverte) = D8
+//D4 (esquerda) = D9
+//D5 (esquerda_inverte)= D5
+
+WiFiServer server(80);                        // Criação do servidor
+
+void andarparafrente() {                      // Funções dos Movimentos
+  digitalWrite(direita, LOW);
+  digitalWrite(esquerda, LOW);
+  digitalWrite(direita_inverte, HIGH);
+  digitalWrite(esquerda_inverte, HIGH);
+}
+void andarparatras() {
+  digitalWrite(direita, HIGH);
+  digitalWrite(esquerda, HIGH);
+  digitalWrite(direita_inverte, LOW);
+  digitalWrite(esquerda_inverte, LOW);
+}
+void andarparaesquerda() {
+  digitalWrite(direita, LOW);
+  digitalWrite(esquerda, HIGH);
+  digitalWrite(direita_inverte, HIGH);
+  digitalWrite(esquerda_inverte, LOW);
+}
+void andarparadireita() {
+  digitalWrite(direita, HIGH);
+  digitalWrite(esquerda, LOW);
+  digitalWrite(direita_inverte, LOW);
+  digitalWrite(esquerda_inverte, HIGH);
+}
+void parar() {
+  digitalWrite(direita, LOW);
+  digitalWrite(esquerda, LOW);
+  digitalWrite(direita_inverte, LOW);
+  digitalWrite(esquerda_inverte, LOW);
+}
+void liga_farol() {
+  Serial.println("farol ligado");
+  digitalWrite(farol, HIGH);
+}
+void desliga_farol() {
+  Serial.println("farol desligado");
+  digitalWrite(farol, LOW);
+}
+
+// nosso servo # contador
+uint8_t servonum = 3;
+
+void setup() {                                                                      //Configuração do programa
+  Serial.begin(115200);                                                             //Velocidade de comunicação do Wemos D1
+  pinMode(direita, OUTPUT);                                                         // Preparação dos motores
+  pinMode(direita_inverte, OUTPUT);
+  pinMode(esquerda, OUTPUT);
+  pinMode(esquerda_inverte, OUTPUT);
+  pinMode(farol, OUTPUT);
+  delay(10);
+  Serial.println();                                                                 // Conexão com o WIFI
+  Serial.println();
+  Serial.print(F("Conectando a "));
+  Serial.println(ssid);
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(F("."));
+  }
+  Serial.println();
+  server.begin();                                                                   //Inicia o servidor
+  Serial.println(F("Rede conectada e Servidor iniciado!"));
+  Serial.print(F("IP do carro: ")); Serial.println(WiFi.localIP());                 //Imprime o IP do carro
+
+  Serial.begin(9600);
+  Serial.println("3 channel Servo test!");
+
+  pwm.begin();
+  // Em teoria, o oscilador interno é de 25MHz, mas na verdade não é
+  // tão preciso. Você pode 'calibrar' ajustando esse número até
+  // você obtém a frequência que está esperando!
+  pwm.setOscillatorFrequency(27000000);  // O int.osc. está mais perto de 27MHz
+  pwm.setPWMFreq(SERVO_FREQ);  // Servos analógicos rodam a ~ 50 Hz atualizações
+
+  delay(10);
+}
+
+// Você pode usar esta função se desejar definir a duração do pulso em segundos
+// por exemplo. setServoPulse (0, 0,001) é uma largura de pulso de ~ 1 milissegundo. Não é preciso!
+void setServoPulse(uint8_t n, double pulse) {
+  double pulselength;
+
+  pulselength = 1000000;   // 1.000.000 nós por segundo
+  pulselength /= SERVO_FREQ;   // Servos analógicos executados a ~ 60 Hz atualizações
+  Serial.print(pulselength); Serial.println(" us per period");
+  pulselength /= 4096;  // 12 bits de resolução
+  Serial.print(pulselength); Serial.println(" us per bit");
+  pulse *= 1000000;  // converter segundos de entrada para nós
+  pulse /= pulselength;
+  Serial.println(pulse);
+  pwm.setPWM(n, 3, pulse);
+}
+
+void loop() {
+  WiFiClient client = server.available();                                           //Checa se há conexão
+  if (!client) {
+    return;
+  }
+  client.setTimeout(1000);                                                          //Tempo de espera da resposta
+  String req = client.readStringUntil('\r');                                        //Lê a ULR do servidor
+  Serial.print(F("COMANDO: "));
+  Serial.println(req);
+  if      (req.indexOf(F("/gpio/F")) != -1) {
+    andarparafrente();
+  }
+  else if (req.indexOf(F("/gpio/T")) != -1) {
+    andarparatras();
+  }
+  else if (req.indexOf(F("/gpio/E")) != -1) {
+    andarparaesquerda();
+  }
+  else if (req.indexOf(F("/gpio/D")) != -1) {
+    andarparadireita();
+  }
+  else if (req.indexOf(F("/gpio/A")) != -1) {
+    if (estado_farol == 0) {
+      liga_farol();
+      estado_farol = 1;
+    } else {
+      desliga_farol();
+      estado_farol = 0;
+    }
+  }
+  else if (req.indexOf(F("/gpio/0")) != -1) {
+    parar();
+  }
+  while (client.available()) {
+    client.read(); // Enquanto houver solicitação, repete a mesma
+  }
+  client.print(F("HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n<!DOCTYPE HTML>\r\n<html>\rIP:"));
+  client.print(WiFi.localIP());
+
+  // Lê o valor do Potenciometro
+    int angle = analogRead(0);
+  // Mapeia o valor de 0 a 180 graus
+  angle = map(angle, 0, 1023, 0, 180);
+  // Repassa o angulo ao ServoWrite
+  //servo3.write(angle);
+  // Delay de 15ms para o Servo alcançar a posição
+  delay(15);
+
+  // Conduza cada servo um de cada vez usando setPWM ()
+  Serial.println(servonum);
+  for (uint16_t pulselen = SERVOMIN; pulselen < SERVOMAX; pulselen++) {
+    pwm.setPWM(servonum, 3, pulselen);
+  }
+
+  delay(500);
+  for (uint16_t pulselen = SERVOMAX; pulselen > SERVOMIN; pulselen--) {
+    pwm.setPWM(servonum, 3, pulselen);
+  }
+
+  delay(500);
+
+  Serial.println(servonum);
+  for (uint16_t pulselen = SERVOMIN; pulselen < SERVOMAX; pulselen++) {
+    pwm.setPWM(servonum, 2, pulselen);
+  }
+
+  delay(500);
+  for (uint16_t pulselen = SERVOMAX; pulselen > SERVOMIN; pulselen--) {
+    pwm.setPWM(servonum, 2, pulselen);
+  }
+
+  delay(500);
+
+  Serial.println(servonum);
+  for (uint16_t pulselen = SERVOMIN; pulselen < SERVOMAX; pulselen++) {
+    pwm.setPWM(servonum, 1, pulselen);
+  }
+
+  delay(500);
+  for (uint16_t pulselen = SERVOMAX; pulselen > SERVOMIN; pulselen--) {
+    pwm.setPWM(servonum, 1, pulselen);
+  }
+
+  delay(500);
+
+  Serial.println(servonum);
+  for (uint16_t pulselen = SERVOMIN; pulselen < SERVOMAX; pulselen++) {
+    pwm.setPWM(servonum, 0, pulselen);
+  }
+
+  delay(500);
+  for (uint16_t pulselen = SERVOMAX; pulselen > SERVOMIN; pulselen--) {
+    pwm.setPWM(servonum, 0, pulselen);
+  }
+
+  delay(500);
+
+  // Conduza cada servo um de cada vez usando writeMicroseconds (), não é preciso devido ao arredondamento dos cálculos!
+  // A função writeMicroseconds () é usada para imitar o comportamento writeMicroseconds () da biblioteca Servo Arduino.
+  for (uint16_t microsec = USMIN; microsec < USMAX; microsec++) {
+    pwm.writeMicroseconds(servonum, microsec);
+  }
+
+  delay(500);
+  for (uint16_t microsec = USMAX; microsec > USMIN; microsec--) {
+    pwm.writeMicroseconds(servonum, microsec);
+  }
+
+  delay(500);
+
+  servonum++;
+  if (servonum > 3) servonum = 0; // Testando os 4 primeiros servo canais
+
+}
